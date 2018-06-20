@@ -1,0 +1,59 @@
+# 18 06 18
+MergeData S:\COS\PyroGeog\amartinez\UAV_seedlings\Lidar\fullLAZ\filelist.txt S:\COS\PyroGeog\amartinez\UAV_seedlings\Lidar\LAS\Seedling_merge.las
+
+
+# 18 06 19
+set LIDAR_DIR=S:\COS\PyroGeog\amartinez\UAV_seedlings\Lidar
+set LASTOOL_DIR=C:\Users\PyroGeo\Downloads\laszip\LAStools\bin
+
+c:
+cd %LASTOOL_DIR%
+
+lasindex -i %LIDAR_DIR%\LAS\Seedling_merge.las
+lastile -i %LIDAR_DIR%\LAS\Seedling_merge.las -o %LIDAR_DIR%\LAS\Tiles\tile.las -refine 20000000 -cores 6
+lastile -i %LIDAR_DIR%\LAS\Tile\*.las -o %LIDAR_DIR%\LAS\Tiles2\tile.las -refine_tiles 20000000 -cores 6
+
+s:
+cd %LIDAR_DIR%
+catalog /density:5,5,10 %LIDAR_DIR%\LAS\Seedling_merge.las merge_cat
+
+dir/s/b %LIDAR_DIR%\LAS\Tiles\*.las > %LIDAR_DIR%\LAS\TileList.txt
+GroundFilter /smooth:8 %LIDAR_DIR%\LAS\Ground\ground.las 1 %LIDAR_DIR%\LAS\TileList.txt
+GridSurfaceCreate /smooth:5 %LIDAR_DIR%\LAS\Ground\MoscowMtn_dtm.dtm 1 F F 2 11 2 0 %LIDAR_DIR%\LAS\Ground\ground.las
+DTM2ASC %LIDAR_DIR%\LAS\Ground\ground.las
+
+CanopyModel /ascii surfacefile 1 F F 2 11 2 0 %LIDAR_DIR%\LAS\TileList.txt
+
+"C:\LAStools\bin\lastile.exe" -v -i "S:\COS\PyroGeog\amartinez\UAV_seedlings\Lidar\LAS\Seedling_merge.las" -tile_size 500 -olas -o "MoscowMtn" -odir "S:\COS\PyroGeog\amartinez\UAV_seedlings\Lidar\LAS\Tiles3"
+
+ClipData /shape:0 /index %LIDAR_DIR%\LAS\TileList.txt %LIDAR_DIR%\LAS\MoscowClip [2380566 1893900 2381332 1894822]
+ClipData /shape:0 /index [switches] %LIDAR_DIR%\LAS\TileList.txt %LIDAR_DIR%\LAS\MoscowClip [2380000 1890968 2382682 1895922]
+
+
+
+
+
+
+# 18 06 19 - 2
+set LIDAR_DIR=S:\COS\PyroGeog\amartinez\UAV_seedlings\Lidar
+s:
+cd %LIDAR_DIR%
+MergeData %LIDAR_DIR%\fullLAZ\filelist.txt %LIDAR_DIR%\LAS\Seedling_merge.las
+catalog /density:5,5,10 %LIDAR_DIR%\LAS\Seedling_merge.las merge_cat
+:: begin lastile using arcgis on server
+"C:\LAStools\bin\lastile.exe" -v -i "S:\COS\PyroGeog\amartinez\UAV_seedlings\Lidar\LAS\Seedling_merge.las" -tile_size 500 -olas -o "MoscowMtn" -odir "S:\COS\PyroGeog\amartinez\UAV_seedlings\Lidar\LAS\Tiles3"
+:: end lastile 
+dir/s/b %LIDAR_DIR%\LAS\Tiles\*.las > %LIDAR_DIR%\LAS\TileList.txt
+GroundFilter /smooth:8 %LIDAR_DIR%\LAS\Ground\ground.las 1 %LIDAR_DIR%\LAS\TileList.txt
+
+ClipData /shape:0 /index %LIDAR_DIR%\LAS\TileList.txt %LIDAR_DIR%\LAS\MoscowClip [2380566 1893900 2381332 1894822]
+GridSurfaceCreate /smooth:5 %LIDAR_DIR%\LAS\Ground\MoscowMtn_dtm.dtm 1 F F 2 11 2 0 %LIDAR_DIR%\LAS\Ground\ground.las
+DTM2ASC %LIDAR_DIR%\LAS\Ground\ground.las
+CanopyModel /ascii surfacefile 1 F F 2 11 2 0 %LIDAR_DIR%\LAS\TileList.txt
+
+
+
+
+
+
+

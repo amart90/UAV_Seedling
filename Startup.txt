@@ -1,0 +1,33 @@
+### Move files to S: drive
+	Files:
+		GeoRef_MMNL
+		GeoRef_MMSH
+		GeoRef_MMSL
+	From:
+		C:\Users\PyroGeo\Downloads\OneDrive_2_6-7-2018
+	To:
+		S:\COS\PyroGeog\amartinez\UAV_seedlings\Lidar\fullLAZ
+
+### Convert laz to to las
+	s:
+	cd S:\COS\PyroGeog\amartinez\UAV_seedlings\Lidar\fullLAZ
+
+### 
+
+ClipData /shape:0 
+[520938 5189455 5189660 521100]
+
+##
+lasmerge -i *.laz -o outFULL.las
+lasboundary -i outFULL.las -oshp
+
+
+
+c:
+cd C:\Users\PyroGeo\Downloads\laszip\LAStools\bin
+las2las -i S:\COS\PyroGeog\amartinez\UAV_seedlings\Lidar\fullLAZ\outFULL.las -o S:\COS\PyroGeog\amartinez\UAV_seedlings\Lidar\fullLAZoutFULL2.las -epsg 6453 -survey_feet -elevation_surveyfeet
+
+lasground_new -i  -o  -wilderness -compute_height
+
+
+
