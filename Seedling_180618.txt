@@ -45,15 +45,27 @@ catalog /density:5,5,10 %LIDAR_DIR%\LAS\Seedling_merge.las merge_cat
 :: end lastile 
 dir/s/b %LIDAR_DIR%\LAS\Tiles\*.las > %LIDAR_DIR%\LAS\TileList.txt
 GroundFilter /smooth:8 %LIDAR_DIR%\LAS\Ground\ground.las 1 %LIDAR_DIR%\LAS\TileList.txt
-
 ClipData /shape:0 /index %LIDAR_DIR%\LAS\TileList.txt %LIDAR_DIR%\LAS\MoscowClip [2380566 1893900 2381332 1894822]
 GridSurfaceCreate /smooth:5 %LIDAR_DIR%\LAS\Ground\MoscowMtn_dtm.dtm 1 F F 2 11 2 0 %LIDAR_DIR%\LAS\Ground\ground.las
-DTM2ASC %LIDAR_DIR%\LAS\Ground\ground.las
-CanopyModel /ascii surfacefile 1 F F 2 11 2 0 %LIDAR_DIR%\LAS\TileList.txt
+DTM2ASCII %LIDAR_DIR%\LAS\Ground\MoscowMtn_dtm.dtm
+CanopyModel /ascii %LIDAR_DIR%\LAS\chm\chm.dtm 1 F F 2 11 2 0 %LIDAR_DIR%\LAS\TileList.txt
+GroundFilter /smooth:8 %LIDAR_DIR%\LAS\Ground\ground_clip.las 1 %LIDAR_DIR%\LAS\MoscowClip.las
+GridSurfaceCreate /smooth:5 %LIDAR_DIR%\LAS\Ground\MoscowMtn_clip_dtm.dtm 1 F F 2 11 2 0 %LIDAR_DIR%\LAS\Ground\ground_clip.las
+DTM2ASCII %LIDAR_DIR%\LAS\Ground\MoscowMtn_clip_dtm.dtm
+
+ClipData /shape:0 /index /dtm:%LIDAR_DIR%\LAS\Ground\MoscowMtn_clip_dtm.dtm %LIDAR_DIR%\LAS\MoscowClip.las %LIDAR_DIR%\LAS\MoscowClip_norm [2380000 1890968 2382682 1895922]
+
+
+CanopyModel /ascii %LIDAR_DIR%\LAS\chm\chm_norm.dtm 1 F F 2 11 2 0 %LIDAR_DIR%\LAS\MoscowClip_norm.las
+
+FileName	MoscowMtn_2380500_1894500.las
+FileName	MoscowMtn_2381000_1894500.las
+FileName	MoscowMtn_2380500_1894000.las
+FileName	MoscowMtn_2381000_1894000.las
+C:/Fusion/groundfilter.exe /gparam:0 /wparam:1 /tolerance:1 /iterations:10 S:/COS/PyroGeog/amartinez/UAV_seedlings/Lidar/LAS//Ground/MoscowMtn_clip2_groundpts.las 0.5 S:/COS/PyroGeog/amartinez/UAV_seedlings/Lidar/LAS//MoscowMtn_clip2.las
 
 
 
-
-
+2380665 1893999 2381231 1894722
 
 
