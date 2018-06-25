@@ -223,11 +223,65 @@ writeRaster(dem2, "S:/COS/PyroGeog/amartinez/UAV_seedlings/Lidar/LAS/Ground/pmf_
 ##############
 las.norm <- lasnormalize(las, dem, method = "knnidw", k = 10, p= 2, model = gstat::vgm(0.59, "Sph", 874), copy = T)
 las.filt <- lasfilter(las.norm, Z < 150)
+writeLAS(las.filt, "S:/COS/PyroGeog/amartinez/UAV_seedlings/Lidar/LAS/LAS_norm.las")
 chm <- grid_canopy(las.filt, res = 0.25, na.fill = "knnidw", k = 10, p = 2)
 chm2 <- as.raster(chm)
 writeRaster(chm2, "S:/COS/PyroGeog/amartinez/UAV_seedlings/Lidar/LAS/chm/chm.tif", overwrite = T)
 
-tree.det <- tree_detection(chm, ws = 17, 1) #18 inch radius, 12 inch minimum seedling 
+tree.det <- tree_detection(chm, ws = 25, 1) #18 inch radius, 12 inch minimum seedling 
 writeRaster(tree.det, "S:/COS/PyroGeog/amartinez/UAV_seedlings/Lidar/LAS/chm/tree_det.tif", overwrite = T)
+lastrees_silva(las.filt, chm2, tree.det)
+tree.met <- tree_metrics(las.filt, func = quantile(Z, probs = 0.9))
+tree.met.seed <- subset(tree.met, V1 < 6)
 
-tree.seg <- lastrees_silva(las, chm2, tree.det, )
+
+
+system(paste(file.path("C:","LAStools", "bin", "las2dem.exe"),  # CHM with normalized LAS
+      "-i", file.path(mainDir, "LAS_norm.las"),
+      "-spike_free 0.5",
+      "-step 0.25",
+      "-o",  file.path(mainDir, "chm", "CHM_spike_free.asc"),
+      sep=" "))
+chm.sf <- raster(file.path(mainDir, "chm", "CHM_spike_free.asc"))
+tree.det.sf <- tree_detection(chm.sf, ws = 17, 1) #18 inch radius, 12 inch minimum seedling 
+summary(tree.det.sf)
+tree.point.sf <- rasterToPoints(tree.det.sf, spatial = T)
+shapefile(tree.point.sf, filename = file.path(mainDir, "Trees", "tree_sf"))
+
+tree.met.sf <- tree_metrics(las.filt, func = quantile(Z, probs = 0.9))
+tree.met.sf.seed <- subset(tree.met, V1 < 6)
+
+###
+###
+###
+paste(file.path("C:","LAStools", "bin", "las2dem.exe"),  # CHM with normalized LAS
+             "-i", file.path(mainDir, "LAS_norm.las"),
+             "-spike_free 0.5",
+             #"-subcircle 0.15",
+             "-step 0.25",
+             "-o",  file.path(mainDir, "chm", "chm_sf6.asc"),
+             sep=" ")
+
+paste(file.path("C:","LAStools", "bin", "las2dem.exe"),   # CHM with original LAS
+      "-i", file.path(mainDir, "MoscowMtn_clip.las"),
+      "-spike_free 0.5",
+      #"-subcircle 0.15",
+      "-step 0.25",
+      "-o",  file.path(mainDir, "chm", "chm_orig_sf.asc"),
+      sep=" ")
+
+paste(file.path("C:","LAStools", "bin", "lasview.exe"),
+      "-i", file.path(mainDir, "chm", "chm_sf3.asc"),
+      "-spike_free 0.45",
+      sep = " ")
+
+paste(file.path("C:","LAStools", "bin", "lasinfo.exe"),
+      "-i", file.path(mainDir, "LAS_norm.las"),
+      "-last_only",
+      "-cd",
+      sep = " ")
+
+chm.sf <- raster(file.path(mainDir, "chm", "chm_sf6.asc"))
+tree.det <- tree_detection(chm.sf, ws = 17, 1)
+####
+
