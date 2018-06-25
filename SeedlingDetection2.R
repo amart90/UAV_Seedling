@@ -2,69 +2,105 @@
 mainDir <- "S:/COS/PyroGeog/amartinez/UAV_seedlings/Lidar/LAS"
 setwd(mainDir)
 
-#        #
-# Fusion #
-#        #
+#=======================================================================#
+# Inital preparation (Fusion and LAStools)
+#=======================================================================#
+# Merge LAZ files into a single point cloud
+system(paste(file.path("C:","Fusion", "mergedata.exe"),
+             "S:\COS\PyroGeog\amartinez\UAV_seedlings\Lidar\fullLAZ\filelist.txt",
+             file.path(mainDir, "Seedling_merge.las"),
+             sep = " "))
 
-# ClipData
+# Tile pointcloud into tiles of 2 million points 
+system(paste(file.path("C:","Fusion", "lastile.exe"),
+             "-i", file.path(mainDir, "Seedling_merge.las"),
+             "-o", file.path(mainDir, "Tiles", "tile.las"),
+             "-refine 20000000", "-cores 6",
+             sep = " "))
+system(paste("dir/s/b",
+             file.path(mainDir, "Tiles", "*.las"),
+             ">", file.path(mainDir, "TileList.txt"),
+             sep = " "))
+
+
 # Clip tiles to seedling area
 system(paste(file.path("C:","Fusion", "clipdata.exe"),
              "/shape:0 /index",
-             file.path(mainDir, "TileList_clip.txt"),
+             file.path(mainDir, "TileList.txt"),
              file.path(mainDir, "MoscowMtn_clip.las"),
              "2380665 1893999 2381231 1894722",
              sep=" "))
 
-# Catalog
-# Produce desriptive report of lidar set
+# View LAS information using LAStools and Fusion
+system(paste(file.path("C:","LAStools", "bin", "lasinfo.exe"),
+             "-i", file.path(mainDir, "LAS_norm.las"),
+             "-last_only",
+             "-cd",
+             sep = " "))
 system(paste(file.path("C:","Fusion", "catalog.exe"),
              "/density:0.125,5,10",
              file.path(mainDir, "MoscowMtn_clip.las"),
              sep=" "))
 
-# GroundFilter
-# Approximate the ground's surface (bare-earth points)
-system(paste(file.path("C:","Fusion", "groundfilter.exe"),
-             "/gparam:0 /wparam:1 /iterations:10",
-             file.path(mainDir, "Ground", "MoscowMtn_clip_groundpts.las"),
-             0.25,
-             file.path(mainDir, "MoscowMtn_clip.las"),
-             sep=" "))
-
-# GridSurfaceCreate
-# Compute the elevation of each grid cell using the average elevation of all 
-# points within the cell
-system(paste(file.path("C:","Fusion", "gridsurfacecreate.exe"),
-             "/smooth:5", 
-             file.path(mainDir, "Ground", "MoscowMtn_DEM.dtm"),
-             "0.25 F F 2 11 2 0",
-             file.path(mainDir, "Ground", "MoscowMtn_clip_groundpts.las"),
-             sep=" "))
-
-# DTM2ASCII
-# Convert the DEM from DTM into ASCII raster
-system(paste(file.path("C:","Fusion", "dtm2ascii.exe"),
-             file.path(mainDir, "Ground", "MoscowMtn_DEM.dtm"),
-             file.path(mainDir, "Ground", "MoscowMtn_DEM.asc"),
-             sep=" "))
-
-# CanopyModel
-# Create a canopy surface model using a LIDAR point cloud by CanopyModel assigning
-# the elevation of the highest return within each grid cell to the grid cell center
-system(paste(file.path("C:","Fusion", "canopymodel.exe"),
-             "/ascii /outlier:-1,150",
-             paste("/ground:",file.path(mainDir, "Ground", "MoscowMtn_DEM.dtm"), sep=""),
-             file.path(mainDir, "chm", "MoscowMtn_clip_CHM.dtm"),
-             "0.5 F F 2 11 2 0",
-             file.path(mainDir, "MoscowMtn_clip.las"),
-             sep=" "))
-
+#=======================================================================#
+# Create ground model -- 0.25 ft (3 in) resolution
+#=======================================================================#
 # Load packages
+library(lidR)
 library(rLiDAR)
-library(raster)
-library(rgeos)
-library(rgdal)
+#library(raster)
+#library(rgeos)
+#library(rgdal)
 
+# Import LAS
+las <- readLAS("S:/COS/PyroGeog/amartinez/UAV_seedlings/Lidar/LAS/MoscowMtn_clip.las")
+
+# Identify ground points (takes approx. 20 hours to run on this dataset)
+dem.las <- grid_terrain(las, res = 0.25, method = "knnidw", k = 10, p = 2,
+                    model = gstat::vgm(0.59, "Sph", 874), keep_lowest = FALSE)
+dem.raster <- as.raster(dem.las)
+writeRaster(dem.raster, file.path(mainDir, "Ground", "pmf_dem.tif"))
+
+#=======================================================================#
+# Create canopy model -- 0.25 ft (3 in) resolution
+#=======================================================================#
+# Remove power lines
+hist(las@data$Z)
+las.pwr.rm <- lasfilter(las, Z < 3050)
+writeLAS(las.pwr.rm, file.path(mainDir, "LAS_pwr_rm.las"))
+
+# Create "spike free" canopy height model
+system(paste(file.path("C:","LAStools", "bin", "las2dem.exe"),  # CHM with normalized LAS
+             "-i", file.path(mainDir, "LAS_pwr_rm.las"),
+             "-spike_free 0.45",
+             "-step 0.25",
+             "-o",  file.path(mainDir, "chm", "CHM_spike_free.asc"),
+             sep=" "))
+chm.sf <- raster(file.path(mainDir, "chm", "CHM_spike_free.asc"))
+
+############Untested########
+#=======================================================================#
+# Locate trees
+#=======================================================================#
+# Identify tree tops
+tree.top <- tree_detection(chm2, ws = 25, hmin = 1) #6 foot radius, 12 inch minimum seedling 
+tree.top.pts <- rasterToPoints(tree.top, spatial = F)
+shapefile(rasterToPoints(tree.det.sf, spatial = T), 
+          filename = file.path(mainDir, "Trees", "tree_tops.shp"), overwrite = T)
+
+# Classify trees in point cloud
+lastrees_silva(las.pwr.rm, chm.sf, tree.top, max_cr_factor = 0.8)
+writeLAS(las.pwr.rm, file.path(mainDir, "LAS_pwr_rm_class.las"))
+
+# Canopy
+canopy <- ForestCAS(chm.sf, tree.top, maxcrown = 6, exclusion = 0)
+
+
+
+
+############################################################################
+#                                  END                                     #
+############################################################################
 # Import canopy height model
 chm <- raster(file.path(mainDir, "chm", "MoscowMtn_clip_CHM.asc"))
 plot(chm)
