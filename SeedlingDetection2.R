@@ -1,3 +1,11 @@
+#=======================================================================#
+#=======================================================================#
+#             Using UAV lidar to identify conifer seedlings             #
+#                         NRS 504 Final Project                         #
+#                            Anthony Martinez                           #
+#=======================================================================#
+#=======================================================================#
+
 # Set directories
 mainDir <- "S:/COS/PyroGeog/amartinez/UAV_seedlings/Lidar/LAS"
 setwd(mainDir)
@@ -56,93 +64,63 @@ library(data.table)
 # Import LAS
 las <- lidR::readLAS(file.path(mainDir, "MoscowMtn_clip.las"))
 
+# Remove flight lines
+hist(las@data$Z) # identify cutoff threshold
+las <- lasfilter(las, Z < 3050)
+
 # Identify ground points (takes approx. 20 hours to run on this dataset)
-dem.las <- grid_terrain(las, res = 0.25, method = "knnidw", k = 10, p = 2, keep_lowest = FALSE)
-dem.raster <- as.raster(dem.las)
-writeRaster(dem.raster, file.path(mainDir, "Ground", "pmf_dem.tif"))
-dem.raster <- raster(file.path(mainDir, "Ground", "pmf_dem.tif"))
+ws <- c(1,2,4,8,16,32,64,128)
+th <- seq(0.1, 2, length.out = length(ws))
+las.ground <- lasground(las, "pmf", ws, th)
+writeLAS(las.ground, file.path(mainDir, "Ground", "MoscowMtn_clip_groundpts.las"))
+dem.grid <- grid_terrain(las.ground, res = 0.25, method = "knnidw", k = 10, p = 2, 
+                        keep_lowest = FALSE)
+dem.raster <- as.raster(dem.grid)
+writeRaster(dem.raster, file.path(mainDir, "Ground", "pmf_dem2.tif"))
 
 #=======================================================================#
 # Create canopy model -- 0.25 ft (3 in) resolution
 #=======================================================================#
-# Remove power lines
-hist(las@data$Z)
-las.pwr.rm <- lasfilter(las, Z < 3050)
-writeLAS(las.pwr.rm, file.path(mainDir, "LAS_pwr_rm.las"))
-las.pwr.rm <- lidR::readLAS(file.path(mainDir, "LAS_pwr_rm_class.las"))
-
-# Create "spike free" canopy height model
+# Create "spike free" canopy height model (with LAStools)
 system(paste(file.path("C:","LAStools", "bin", "las2dem.exe"),  # CHM with normalized LAS
              "-i", file.path(mainDir, "LAS_pwr_rm.las"),
-             "-spike_free 0.45", # freeze distance: ~ 3 times the average pulse spacing
+             "-spike_free 0.45", # freeze distance: ~ 3x the average pulse spacing
              "-step 0.25",
              "-o",  file.path(mainDir, "chm", "CHM_spike_free.asc"),
              sep=" "))
 chm.sf <- raster(file.path(mainDir, "chm", "CHM_spike_free.asc"))
-#chm.sf.sm <- CHMsmoothing(chm.sf, filter = "Gaussian", ws = 3, sigma = 0.5)
+chm.sf <- CHMsmoothing(chm.sf, filter = "Gaussian", ws = 3, sigma = 0.5)
+writeRaster(chm.sf, file.path(mainDir, "chm", "CHM_spike_free_sm.asc"))
+chm.sf <- raster(file.path(mainDir, "chm", "CHM_spike_free_sm.asc"))
 
-############Untested########
 #=======================================================================#
 # Locate trees
 #=======================================================================#
-# Identify tree tops
-tree.top.ras <- tree_detection(chm.sf.sm, ws = 25, hmin = 1) #6 foot radius, 12 inch minimum seedling 
+# Identify tree tops -- 6 foot diameter, 12 inch minimum seedling
+tree.top.ras <- tree_detection(chm.sf, ws = 25, hmin = 1)
 tree.top.pts <- rasterToPoints(tree.top.ras, spatial = T)
 tree.top <- as.data.frame(rasterToPoints(tree.top.ras, spatial = F))
 colnames(tree.top) <- c("x", "y", "id")
-shapefile(tree.top.pts, filename = file.path(mainDir, "Trees", "tree_tops.shp"), overwrite = T)
+shapefile(tree.top.pts, filename = file.path(mainDir, "Trees", "tree_tops.shp"), 
+          overwrite = T)
 
 # Classify trees in point cloud
 #lastrees_silva(las.pwr.rm, chm.sf, tree.top, max_cr_factor = 0.8)
 #writeLAS(las.pwr.rm, file.path(mainDir, "LAS_pwr_rm_class.las"))
 
-# Canopy
-#canopy <- ForestCAS(chm.sf.sm, tree.top[1:20,], maxcrown = 6, exclusion = 0.1)
-#save(canopy, file = file.path(mainDir, "Trees", "canopy.RData"))
-#tree.bound <- canopy[[1]]
-#shapefile(tree.bound, filename = file.path(mainDir, "Trees", "tree_bounds.shp"), overwrite = T)
-#canopy.list <- canopy[[2]]
-#canopy.list$crad <-  sqrt(canopy.list$ca/pi)
-
-# ht
-chm.norm <- chm.sf.sm - dem.raster
-writeRaster(chm.norm, file.path(mainDir, "chm", "chm_norm.tif"))
-ht2 <- extract(chm.norm, tree.top.pts)
+# Determine tree heights
+chm.norm <- chm.sf - dem.raster
+writeRaster(chm.norm, file.path(mainDir, "chm", "chm_norm.tif"), overwrite = T)
+chm.norm <- raster(file.path(mainDir, "chm", "chm_norm.tif"))
 tree.top.pts@data$ht <- extract(chm.norm, tree.top.pts)
 
 ############################################################################
-#  Sampling
+#  Accuracy assessment
 ############################################################################
-# Import sampled trees
-tree.samp <- readOGR("S:/COS/PyroGeog/amartinez/UAV_seedlings/Lidar/GIS/SampledTrees.shp")
-tree.samp@data$OBJNAME <- as.character(tree.samp@data$OBJNAME)
+# Import sampled trees and tree-absences
+tree.abs <- readOGR("S:/COS/PyroGeog/amartinez/UAV_seedlings/Lidar/GIS/RandomPoints.shp")
+tree.samp <- readOGR("S:/COS/PyroGeog/amartinez/UAV_seedlings/Lidar/GIS/SampledTrees.shp", stringsAsFactors = FALSE)
 proj4string(tree.top.pts) <- proj4string(tree.samp)
-
-SapID <- function(x, y, z){
-  buff <- gBuffer(y, byid = T, width = z)
-  a <- over(x, buff)
-}
-
-tree.top.pts@data$int.1 <- SapID(tree.top.pts, tree.samp, 1)
-tree.top.pts@data$int.2 <- SapID(tree.top.pts, tree.samp, 2)
-tree.top.pts@data$int.3 <- SapID(tree.top.pts, tree.samp, 3)
-tree.top.pts@data$int.4 <- SapID(tree.top.pts, tree.samp, 4)
-tree.top.pts@data$int.5 <- SapID(tree.top.pts, tree.samp, 5)
-
-a <- tree.top.pts@data[, c(2, 7)]
-b <- tree.samp@data[, c(1,4)]
-
-which("SL_022", b)
-tree.top.pts$int.5 <- as.character(tree.top.pts$int.5)
-d <- base::merge(a, b, by.x = 2, by.y = 1, sort = F)
-
-
-head(tree.top.pts$int.5)
-a <- tree.top.pts$int.5[1][!is.na(tree.top.pts$int.5[1])]
-
-x = tree.top.pts
-y = tree.samp
-z = 3
 
 SapID <- function(x, y, z){
   buff <- gBuffer(y, byid = T, width = z)
@@ -155,7 +133,20 @@ SapID <- function(x, y, z){
   b$diff <- abs(b$tree.top.ht - b$sample.ht)
   b <- data.table(b)
   b <- b[ , .SD[which.min(diff)], by = tree.top.id]
-  data.frame(b)
+  b <- b[ , .SD[which.min(diff)], by = sample.name]
+  b$no <- z
+  buff.abs <- gBuffer(tree.abs, byid = T, width = z)
+  d <- gContains(buff.abs, tree.top.pts, byid = T)
+  e <- as.data.frame(which(d, arr.ind = T))
+  colnames(e) <- c("tree.top.id", "abs.sample.no")
+  acc <- c(nrow(e), nrow(b))
+  names(acc) <- c("False.Pos", "True.Pos")
+  assign(paste0("tree.samp.", z), tree.samp[unique(b$sample.no),], envir = .GlobalEnv)
+  assign(paste0("tree.top.", z), x[b$tree.top.id,], envir = .GlobalEnv)
+  assign(paste0("tree.abs.", z), tree.abs[unique(e$abs.sample.no),], envir = .GlobalEnv)
+  assign(paste0("tree.id.", z), data.frame(b), envir = .GlobalEnv)
+  assign(paste0("accuracy.", z), acc)
+  paste0("created objects: ", "tree.samp.", z, ", tree.top.", z, ", tree.abs.", z, " tree.id.", z, ", & accuracy.", z)
 }
 
 SapID(tree.top.pts, tree.samp, 1)
@@ -163,239 +154,46 @@ SapID(tree.top.pts, tree.samp, 2)
 SapID(tree.top.pts, tree.samp, 3)
 SapID(tree.top.pts, tree.samp, 4)
 SapID(tree.top.pts, tree.samp, 5)
+shapefile(tree.samp.5, file.path(mainDir, "Trees", "Tree_samp_5.shp"))
 
+
+############################################################################
+#  Visualization and figures
+############################################################################
+sap.ht <- tree.top.pts@data$ht[tree.top.pts@data$ht < 9]
+hist(sap.ht, xlab = "Sapling height (ft.)", main = "")
+summary(sap.ht)
+tree.id.4
+boxplot(tree.id.1$diff, tree.id.2$diff, tree.id.3$diff, tree.id.4$diff, tree.id.5$diff,
+        xlab = "Buffer radius (ft.)", ylab = "Height difference (ft.)", names = 1:5)
+
+a <- tree.id.5
+a$no[which(a$tree.top.id %in% Reduce(intersect, list(tree.id.5$tree.top.id,tree.id.3$tree.top.id)))] <- 4
+
+for(i in rev(1:5)){
+  a$no[which(a$tree.top.id %in% 
+               Reduce(intersect, list(tree.id.5$tree.top.id, 
+                                      get(paste0("tree.id.", i))$tree.top.id)))] <- 6-i
+}
+as.numeric(rownames(tree.top.5@data))
+tree.top.5@data$no <- a$no
+shapefile(tree.top.5, file.path(mainDir, "Trees", "Tree_top_5.shp"), overwrite = T)
+
+hist(las@data$Z, breaks = 50, col = "gray40", border = "gray40", yaxt='n', xaxt = 'n', ann = F)
 
 ############################################################################
 #                                  END                                     #
 ############################################################################
-
-
-
-# Import canopy height model
-chm <- raster(file.path(mainDir, "chm", "MoscowMtn_clip_CHM.asc"))
-plot(chm)
-summary(chm)
-
-# Smooth canopy (set parameters and execute)
-ws <- 5 # 3x3 window size
-filter <- "Gaussian" # Gaussian filter type
-sigma <- 0.5
-sCHM <- CHMsmoothing(chm, filter, ws, sigma)
-plot(sCHM)
-
-# Individual tree detection list (set parameters and execute)
-fws <- 5 # 3x3 fixed window size
-minht <- 1 # 0.5 ft. minimum height above ground
-loc.trees <- FindTreesCHM(sCHM, fws, minht)
-loc <- subset(loc.trees, height < 7)
-coords <- loc[,1:2]
-data <- as.data.frame(loc[,3])
-trees <- SpatialPointsDataFrame(coords, data = data, proj4string = CRS("+init=epsg:6453"))
-plot(trees)
-plot(loc.obs)
-shapefile(trees, "Trees/trees.shp", overwrite = TRUE)
-
-
-loc.obs <- readOGR("S:/COS/PyroGeog/amartinez/UAV_seedlings/Lidar/GIS/SeedClip.shp")
-
-
-###
-# 2
-system(paste(file.path("C:","Fusion", "groundfilter.exe"),
-             "/gparam:0 /wparam:1 /smooth:3 /iterations:10",
-             file.path(mainDir, "Ground", "MoscowMtn_clip_groundpts2.las"),
-             0.25,
-             file.path(mainDir, "MoscowMtn_clip.las"),
-             sep=" "))
-system(paste(file.path("C:","Fusion", "gridsurfacecreate.exe"),
-             "/smooth:5", 
-             file.path(mainDir, "Ground", "MoscowMtn_DEM2.dtm"),
-             "0.25 F F 2 11 2 0",
-             file.path(mainDir, "Ground", "MoscowMtn_clip_groundpts2.las"),
-             sep=" "))
-system(paste(file.path("C:","Fusion", "dtm2ascii.exe"),
-             file.path(mainDir, "Ground", "MoscowMtn_DEM2.dtm"),
-             file.path(mainDir, "Ground", "MoscowMtn_DEM2.asc"),
-             sep=" "))
-#
-# 3
-system(paste(file.path("C:","Fusion", "groundfilter.exe"),
-             "/gparam:-2 /wparam:2.5 /smooth:3 /iterations:10",
-             file.path(mainDir, "Ground", "MoscowMtn_clip_groundpts3.las"),
-             0.25,
-             file.path(mainDir, "MoscowMtn_clip.las"),
-             sep=" "))
-system(paste(file.path("C:","Fusion", "gridsurfacecreate.exe"),
-             "/smooth:5", 
-             file.path(mainDir, "Ground", "MoscowMtn_DEM3.dtm"),
-             "0.25 F F 2 11 2 0",
-             file.path(mainDir, "Ground", "MoscowMtn_clip_groundpts3.las"),
-             sep=" "))
-system(paste(file.path("C:","Fusion", "dtm2ascii.exe"),
-             file.path(mainDir, "Ground", "MoscowMtn_DEM3.dtm"),
-             file.path(mainDir, "Ground", "MoscowMtn_DEM3.asc"),
-             sep=" "))
-# best so far
-# 4
-system(paste(file.path("C:","Fusion", "groundfilter.exe"),
-             "/gparam:-4 /wparam:4.5 /smooth:3 /iterations:10",
-             file.path(mainDir, "Ground", "MoscowMtn_clip_groundpts4.las"),
-             0.25,
-             file.path(mainDir, "MoscowMtn_clip.las"),
-             sep=" "))
-system(paste(file.path("C:","Fusion", "gridsurfacecreate.exe"),
-             "/smooth:5", 
-             file.path(mainDir, "Ground", "MoscowMtn_DEM4.dtm"),
-             "0.25 F F 2 11 2 0",
-             file.path(mainDir, "Ground", "MoscowMtn_clip_groundpts4.las"),
-             sep=" "))
-system(paste(file.path("C:","Fusion", "dtm2ascii.exe"),
-             file.path(mainDir, "Ground", "MoscowMtn_DEM4.dtm"),
-             file.path(mainDir, "Ground", "MoscowMtn_DEM4.asc"),
-             sep=" "))
-#
-# 5
-system(paste(file.path("C:","Fusion", "groundfilter.exe"),
-             "/gparam:-2 /wparam:2.5 /median:5 /iterations:10",
-             file.path(mainDir, "Ground", "MoscowMtn_clip_groundpts5.las"),
-             0.25,
-             file.path(mainDir, "MoscowMtn_clip.las"),
-             sep=" "))
-system(paste(file.path("C:","Fusion", "gridsurfacecreate.exe"),
-             "/smooth:5", 
-             file.path(mainDir, "Ground", "MoscowMtn_DEM5.dtm"),
-             "0.25 F F 2 11 2 0",
-             file.path(mainDir, "Ground", "MoscowMtn_clip_groundpts5.las"),
-             sep=" "))
-system(paste(file.path("C:","Fusion", "dtm2ascii.exe"),
-             file.path(mainDir, "Ground", "MoscowMtn_DEM5.dtm"),
-             file.path(mainDir, "Ground", "MoscowMtn_DEM5.asc"),
-             sep=" "))
-
-
-system(paste(file.path("C:","Fusion", "lda2ascii.exe"),
-             file.path(mainDir, "MoscowMtn_clip.las"),
-             file.path(mainDir, "MoscowMtn_clip.txt"),
-             "1",
-             sep=" "))
-# 
-# 4
-system(paste(file.path("C:","Fusion", "groundfilter.exe"),
-             "/gparam:-4 /wparam:4.5 /smooth:3 /iterations:10",
-             file.path(mainDir, "Ground", "MoscowMtn_clip_groundpts4.las"),
-             0.25,
-             file.path(mainDir, "MoscowMtn_clip.las"),
-             sep=" "))
-system(paste(file.path("C:","Fusion", "gridsurfacecreate.exe"),
-             "/smooth:5", 
-             file.path(mainDir, "Ground", "MoscowMtn_DEM4.dtm"),
-             "0.25 F F 2 11 2 0",
-             file.path(mainDir, "Ground", "MoscowMtn_clip_groundpts4.las"),
-             sep=" "))
-system(paste(file.path("C:","Fusion", "dtm2ascii.exe"),
-             file.path(mainDir, "Ground", "MoscowMtn_DEM4.dtm"),
-             file.path(mainDir, "Ground", "MoscowMtn_DEM4.asc"),
-             sep=" "))
-
-
-####
-library(lidR)
-las <- readLAS("S:/COS/PyroGeog/amartinez/UAV_seedlings/Lidar/LAS/MoscowMtn_clip.las")
-ws <- c(1,2,4,8,16,32,64,128)
-th <- seq(0.1, 2, length.out = length(ws))
-las.ground <- lasground(las, MaxWinSize = 20, Slope = 0.3, InitDist = 0.15, MaxDist = 10, CellSize = 0.2)
-
-####
-las <- readLAS("S:/COS/PyroGeog/amartinez/UAV_seedlings/Lidar/LAS/MoscowMtn_clip.las")
-ws <- c(1,2,4,8,16,32,64,128)
-th <- seq(0.1, 2, length.out = length(ws))
-las.ground <- lasground(las, "pmf", ws, th)
-
-###
-las <- readLAS("S:/COS/PyroGeog/amartinez/UAV_seedlings/Lidar/LAS/MoscowMtn_clip.las")
-u <- util_makeZhangParam(b = 2, dh0 = 0.15, dhmax = 3, s = 0.35, max_ws = 15)
-Sys.time()
-lasground(las, "pmf", u$ws, u$th)
-writeLAS(las, "S:/COS/PyroGeog/amartinez/UAV_seedlings/Lidar/LAS/LAS_gr_class.las")
-Sys.time()
-
-dem <- grid_terrain(las, res = 0.25, method = "knnidw", k = 10, p = 2,
-             model = gstat::vgm(0.59, "Sph", 874), keep_lowest = FALSE)
-dem2 <- as.raster(dem)
-writeRaster(dem2, "S:/COS/PyroGeog/amartinez/UAV_seedlings/Lidar/LAS/Ground/pmf_dem.tif")
-
-##############
-############## Contuinuing on
-##############
-las.norm <- lasnormalize(las, dem, method = "knnidw", k = 10, p= 2, model = gstat::vgm(0.59, "Sph", 874), copy = T)
-las.filt <- lasfilter(las.norm, Z < 150)
-writeLAS(las.filt, "S:/COS/PyroGeog/amartinez/UAV_seedlings/Lidar/LAS/LAS_norm.las")
-chm <- grid_canopy(las.filt, res = 0.25, na.fill = "knnidw", k = 10, p = 2)
-chm2 <- as.raster(chm)
-writeRaster(chm2, "S:/COS/PyroGeog/amartinez/UAV_seedlings/Lidar/LAS/chm/chm.tif", overwrite = T)
-
-tree.det <- tree_detection(chm, ws = 25, 1) #18 inch radius, 12 inch minimum seedling 
-writeRaster(tree.det, "S:/COS/PyroGeog/amartinez/UAV_seedlings/Lidar/LAS/chm/tree_det.tif", overwrite = T)
-lastrees_silva(las.filt, chm2, tree.det)
-tree.met <- tree_metrics(las.filt, func = quantile(Z, probs = 0.9))
-tree.met.seed <- subset(tree.met, V1 < 6)
-
-
-
-system(paste(file.path("C:","LAStools", "bin", "las2dem.exe"),  # CHM with normalized LAS
-      "-i", file.path(mainDir, "LAS_norm.las"),
-      "-spike_free 0.5",
-      "-step 0.25",
-      "-o",  file.path(mainDir, "chm", "CHM_spike_free.asc"),
-      sep=" "))
-chm.sf <- raster(file.path(mainDir, "chm", "CHM_spike_free.asc"))
-tree.det.sf <- tree_detection(chm.sf, ws = 17, 1) #18 inch radius, 12 inch minimum seedling 
-summary(tree.det.sf)
-tree.point.sf <- rasterToPoints(tree.det.sf, spatial = T)
-shapefile(tree.point.sf, filename = file.path(mainDir, "Trees", "tree_sf"))
-
-tree.met.sf <- tree_metrics(las.filt, func = quantile(Z, probs = 0.9))
-tree.met.sf.seed <- subset(tree.met, V1 < 6)
-
-###
-###
-###
-paste(file.path("C:","LAStools", "bin", "las2dem.exe"),  # CHM with normalized LAS
-             "-i", file.path(mainDir, "LAS_norm.las"),
-             "-spike_free 0.5",
-             #"-subcircle 0.15",
-             "-step 0.25",
-             "-o",  file.path(mainDir, "chm", "chm_sf6.asc"),
-             sep=" ")
-
-paste(file.path("C:","LAStools", "bin", "las2dem.exe"),   # CHM with original LAS
-      "-i", file.path(mainDir, "MoscowMtn_clip.las"),
-      "-spike_free 0.5",
-      #"-subcircle 0.15",
-      "-step 0.25",
-      "-o",  file.path(mainDir, "chm", "chm_orig_sf.asc"),
-      sep=" ")
-
-paste(file.path("C:","LAStools", "bin", "lasview.exe"),
-      "-i", file.path(mainDir, "chm", "chm_sf3.asc"),
-      "-spike_free 0.45",
-      sep = " ")
-
-paste(file.path("C:","LAStools", "bin", "lasinfo.exe"),
-      "-i", file.path(mainDir, "LAS_norm.las"),
-      "-last_only",
-      "-cd",
-      sep = " ")
-
-chm.sf <- raster(file.path(mainDir, "chm", "chm_sf6.asc"))
-tree.det <- tree_detection(chm.sf, ws = 17, 1)
-####
-las <- lidR::readLAS(file.path(mainDir, "MoscowMtn_clip.las"), filter = "-drop_z_above 3050")
-tree.top.las <- tree_detection(las, 25, 1)
-spdf <- SpatialPointsDataFrame(data.frame(tree.top.las[,1:2]), data = data.frame(tree.top.las[,3]))
-shapefile(spdf, filename = file.path(mainDir, "Trees", "tree_test.shp"), overwrite = T)
-####
+#import
 las.pwr.rm <- lidR::readLAS(file.path(mainDir, "LAS_pwr_rm_class.las"))
-las.non.ground <- lasfilter(las.pwr.rm, Classification == 1)
-las.ground <- lasfilter(las.pwr.rm, Classification == 2)
-hist(las.ground@data$Intensity)
+las.pwr.rm <- lidR::readLAS(file.path(mainDir, "LAS_pwr_rm_class.las"))
+dem.raster <- raster(file.path(mainDir, "Ground", "pmf_dem.tif"))
+las.ground <- lidR::readLAS(file.path(mainDir, "Ground", "MoscowMtn_clip_groundpts.las"), 
+                            filter = "-drop_z_above 3050")
+dem.raster <- raster(file.path(mainDir, "Ground", "pmf_dem.tif"))
+
+
+x = tree.top.pts
+y = tree.samp
+z = 5
+
